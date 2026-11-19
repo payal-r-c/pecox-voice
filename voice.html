@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pecox Voice Note</title>
+<style>
+ body{font-family:Arial,sans-serif;background:#f3f5f7;margin:0;padding:28px;text-align:center}
+ button{width:150px;height:150px;border-radius:50%;border:none;background:#2563eb;color:#fff;font-size:18px;font-weight:700;cursor:pointer}
+ button.rec{background:#dc2626;animation:p 1.2s infinite}
+ @keyframes p{50%{box-shadow:0 0 0 18px rgba(220,38,38,0)}}
+ #s{margin-top:22px;font-size:14px;color:#475569}
+</style></head><body>
+<h3>Visit remarks voice note</h3>
+<button id="b" onclick="toggle()">Tap to speak</button>
+<div id="s">Speak in any language. Tap again to stop.</div>
+<script>
+let rec,stream,chunks=[],t0=0;
+const s=m=>document.getElementById('s').textContent=m;
+function toggle(){
+  if(rec&&rec.state==='recording'){rec.stop();return;}
+  navigator.mediaDevices.getUserMedia({audio:true}).then(st=>{
+    stream=st;chunks=[];rec=new MediaRecorder(st);
+    rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);
+    rec.onstop=done;rec.start();t0=Date.now();
+    b.className='rec';b.textContent='Stop';s('Recording... tap Stop when finished');
+  }).catch(e=>s('Microphone error: '+e.name+'. Allow the microphone for this page.'));
+}
+async function done(){
+  stream.getTracks().forEach(t=>t.stop());b.className='';b.textContent='Tap to speak';
+  if(Date.now()-t0<700){s('Too short. Try again.');return;}
+  s('Preparing...');
+  try{
+    const blob=new Blob(chunks,{type:rec.mimeType||'audio/webm'});
+    const ctx=new (window.AudioContext||window.webkitAudioContext)();
+    const dec=await ctx.decodeAudioData(await blob.arrayBuffer());
+    const off=new OfflineAudioContext(1,Math.max(1,Math.ceil(dec.duration*16000)),16000);
+    const src=off.createBufferSource();src.buffer=dec;src.connect(off.destination);src.start(0);
+    const f=(await off.startRendering()).getChannelData(0);
+    const buf=new ArrayBuffer(44+f.length*2),v=new DataView(buf);
+    const w=(o,x)=>{for(let i=0;i<x.length;i++)v.setUint8(o+i,x.charCodeAt(i))};
+    w(0,'RIFF');v.setUint32(4,36+f.length*2,true);w(8,'WAVE');w(12,'fmt ');
+    v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+    v.setUint32(24,16000,true);v.setUint32(28,32000,true);v.setUint16(32,2,true);v.setUint16(34,16,true);
+    w(36,'data');v.setUint32(40,f.length*2,true);
+    for(let i=0;i<f.length;i++){const x=Math.max(-1,Math.min(1,f[i]));v.setInt16(44+i*2,x<0?x*32768:x*32767,true);}
+    const r=new FileReader();
+    r.onload=()=>{
+      if(!window.opener){s('Lost connection to the app. Close this window and try again.');return;}
+      window.opener.postMessage({type:'pq-voice',data:String(r.result).split(',')[1],mime:'audio/wav'},'*');
+      s('Sent. Translating in the app...');setTimeout(()=>window.close(),700);
+    };
+    r.readAsDataURL(new Blob([buf],{type:'audio/wav'}));
+  }catch(e){s('Error: '+e.message);}
+}
+</script></body></html>
