@@ -2,64 +2,50 @@
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pecox Voice Note</title>
 <style>
- body{font-family:Arial,sans-serif;background:#f3f5f7;margin:0;padding:28px;text-align:center}
- button{width:150px;height:150px;border-radius:50%;border:none;background:#2563eb;color:#fff;font-size:18px;font-weight:700;cursor:pointer}
+ body{font-family:Arial,sans-serif;background:#f3f5f7;margin:0;padding:20px;text-align:center}
+ select{padding:8px 12px;font-size:15px;border-radius:8px;border:1px solid #cbd5e1;margin-bottom:14px}
+ button{width:130px;height:130px;border-radius:50%;border:none;background:#2563eb;color:#fff;font-size:17px;font-weight:700;cursor:pointer}
  button.rec{background:#dc2626;animation:p 1.2s infinite}
- @keyframes p{50%{box-shadow:0 0 0 18px rgba(220,38,38,0)}}
- #s{margin-top:22px;font-size:14px;color:#475569}
+ @keyframes p{50%{box-shadow:0 0 0 16px rgba(220,38,38,0)}}
+ #s{margin-top:14px;font-size:13px;color:#475569}
+ #t{margin-top:12px;min-height:60px;max-height:120px;overflow:auto;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:8px;font-size:14px;text-align:left}
 </style></head><body>
 <h3>Visit remarks voice note</h3>
+<div>Language you will speak:<br>
+<select id="lang">
+ <option value="hi-IN">Hindi</option><option value="en-IN">English (India)</option>
+ <option value="pa-IN">Punjabi</option><option value="gu-IN">Gujarati</option>
+ <option value="mr-IN">Marathi</option><option value="bn-IN">Bengali</option>
+ <option value="ta-IN">Tamil</option><option value="te-IN">Telugu</option>
+</select></div>
 <button id="b" onclick="toggle()">Tap to speak</button>
-<div id="s">Speak as long as you need. Tap again to stop.</div>
+<div id="s">Speak as long as you need. Tap Stop when finished.</div>
+<div id="t"></div>
 <script>
-const SEG_MS=25000, RATE=8000;
-let stream,rec,active=false,segTimer,seq=0,segStart=0;
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 const s=m=>document.getElementById('s').textContent=m;
-
+let r=null,active=false,finalText='';
+if(!SR){s('This browser has no speech recognition. Use Google Chrome.');}
 function toggle(){
-  if(active){ active=false; clearTimeout(segTimer); b.className='';b.textContent='Tap to speak'; s('Sending last part...'); if(rec&&rec.state==='recording')rec.stop(); return; }
-  navigator.mediaDevices.getUserMedia({audio:true}).then(st=>{
-    stream=st; active=true; seq=0; startSeg();
-    b.className='rec'; b.textContent='Stop'; s('Recording... speak as long as you need, tap Stop when finished');
-  }).catch(e=>s('Microphone error: '+e.name+'. Allow the microphone for this page.'));
+  if(!SR)return;
+  if(active){active=false;b.className='';b.textContent='Tap to speak';r.stop();return;}
+  finalText='';t.textContent='';
+  r=new SR();r.lang=lang.value;r.continuous=true;r.interimResults=true;
+  r.onresult=e=>{let interim='';
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      const x=e.results[i][0].transcript;
+      if(e.results[i].isFinal)finalText+=x+' ';else interim+=x;}
+    t.textContent=finalText+interim;};
+  r.onerror=e=>{ if(e.error!=='no-speech'&&e.error!=='aborted') s('Error: '+e.error); };
+  r.onend=()=>{ if(active){try{r.start();}catch(e){}} else send(); };
+  active=true;r.start();
+  b.className='rec';b.textContent='Stop';s('Listening... speak now');
 }
-
-function startSeg(){
-  const my=[]; const r=new MediaRecorder(stream); rec=r;
-  r.ondataavailable=e=>e.data.size&&my.push(e.data);
-  r.onstop=()=>{
-    const last=!active;
-    process(my,r.mimeType,Date.now()-segStart,last);
-    if(!last) startSeg(); else stream.getTracks().forEach(t=>t.stop());
-  };
-  segStart=Date.now(); r.start();
-  segTimer=setTimeout(()=>{ if(r.state==='recording') r.stop(); },SEG_MS);
+function send(){
+  const text=(finalText||t.textContent).trim();
+  if(!text){s('No speech heard. Try again.');return;}
+  if(!window.opener){s('Lost connection to the app. Close this window and try again.');return;}
+  window.opener.postMessage({type:'pq-voice-text',text:text,lang:lang.value},'*');
+  s('Sent. You can close this window.');setTimeout(()=>window.close(),600);
 }
-
-async function process(chunks,mime,ms,last){
-  try{
-    if(ms<600||!chunks.length){ if(last)finish(); return; }
-    const blob=new Blob(chunks,{type:mime||'audio/webm'});
-    const ctx=new (window.AudioContext||window.webkitAudioContext)();
-    const dec=await ctx.decodeAudioData(await blob.arrayBuffer());
-    const off=new OfflineAudioContext(1,Math.max(1,Math.ceil(dec.duration*RATE)),RATE);
-    const src=off.createBufferSource();src.buffer=dec;src.connect(off.destination);src.start(0);
-    const f=(await off.startRendering()).getChannelData(0);
-    const buf=new ArrayBuffer(44+f.length*2),v=new DataView(buf);
-    const w=(o,x)=>{for(let i=0;i<x.length;i++)v.setUint8(o+i,x.charCodeAt(i))};
-    w(0,'RIFF');v.setUint32(4,36+f.length*2,true);w(8,'WAVE');w(12,'fmt ');
-    v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
-    v.setUint32(24,RATE,true);v.setUint32(28,RATE*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);
-    w(36,'data');v.setUint32(40,f.length*2,true);
-    for(let i=0;i<f.length;i++){const x=Math.max(-1,Math.min(1,f[i]));v.setInt16(44+i*2,x<0?x*32768:x*32767,true);}
-    const r=new FileReader();
-    r.onload=()=>{
-      if(!window.opener){s('Lost connection to the app. Close this window and try again.');return;}
-      window.opener.postMessage({type:'pq-voice',seq:seq++,data:String(r.result).split(',')[1],mime:'audio/wav'},'*');
-      if(last)finish(); else s('Recording... part '+seq+' sent');
-    };
-    r.readAsDataURL(new Blob([buf],{type:'audio/wav'}));
-  }catch(e){ s('Error: '+e.message); }
-}
-function finish(){ s('Done. Translating in the app...'); setTimeout(()=>window.close(),800); }
 </script></body></html>
