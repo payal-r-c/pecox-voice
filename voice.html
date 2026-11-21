@@ -10,44 +10,56 @@
 </style></head><body>
 <h3>Visit remarks voice note</h3>
 <button id="b" onclick="toggle()">Tap to speak</button>
-<div id="s">Speak in any language. Tap again to stop.</div>
+<div id="s">Speak as long as you need. Tap again to stop.</div>
 <script>
-let rec,stream,chunks=[],t0=0;
+const SEG_MS=25000, RATE=8000;
+let stream,rec,active=false,segTimer,seq=0,segStart=0;
 const s=m=>document.getElementById('s').textContent=m;
+
 function toggle(){
-  if(rec&&rec.state==='recording'){rec.stop();return;}
+  if(active){ active=false; clearTimeout(segTimer); b.className='';b.textContent='Tap to speak'; s('Sending last part...'); if(rec&&rec.state==='recording')rec.stop(); return; }
   navigator.mediaDevices.getUserMedia({audio:true}).then(st=>{
-    stream=st;chunks=[];rec=new MediaRecorder(st);
-    rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);
-    rec.onstop=done;rec.start();t0=Date.now();
-    b.className='rec';b.textContent='Stop';s('Recording... tap Stop when finished');
+    stream=st; active=true; seq=0; startSeg();
+    b.className='rec'; b.textContent='Stop'; s('Recording... speak as long as you need, tap Stop when finished');
   }).catch(e=>s('Microphone error: '+e.name+'. Allow the microphone for this page.'));
 }
-async function done(){
-  stream.getTracks().forEach(t=>t.stop());b.className='';b.textContent='Tap to speak';
-  if(Date.now()-t0<700){s('Too short. Try again.');return;}
-  s('Preparing...');
+
+function startSeg(){
+  const my=[]; const r=new MediaRecorder(stream); rec=r;
+  r.ondataavailable=e=>e.data.size&&my.push(e.data);
+  r.onstop=()=>{
+    const last=!active;
+    process(my,r.mimeType,Date.now()-segStart,last);
+    if(!last) startSeg(); else stream.getTracks().forEach(t=>t.stop());
+  };
+  segStart=Date.now(); r.start();
+  segTimer=setTimeout(()=>{ if(r.state==='recording') r.stop(); },SEG_MS);
+}
+
+async function process(chunks,mime,ms,last){
   try{
-    const blob=new Blob(chunks,{type:rec.mimeType||'audio/webm'});
+    if(ms<600||!chunks.length){ if(last)finish(); return; }
+    const blob=new Blob(chunks,{type:mime||'audio/webm'});
     const ctx=new (window.AudioContext||window.webkitAudioContext)();
     const dec=await ctx.decodeAudioData(await blob.arrayBuffer());
-    const off=new OfflineAudioContext(1,Math.max(1,Math.ceil(dec.duration*16000)),16000);
+    const off=new OfflineAudioContext(1,Math.max(1,Math.ceil(dec.duration*RATE)),RATE);
     const src=off.createBufferSource();src.buffer=dec;src.connect(off.destination);src.start(0);
     const f=(await off.startRendering()).getChannelData(0);
     const buf=new ArrayBuffer(44+f.length*2),v=new DataView(buf);
     const w=(o,x)=>{for(let i=0;i<x.length;i++)v.setUint8(o+i,x.charCodeAt(i))};
     w(0,'RIFF');v.setUint32(4,36+f.length*2,true);w(8,'WAVE');w(12,'fmt ');
     v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
-    v.setUint32(24,16000,true);v.setUint32(28,32000,true);v.setUint16(32,2,true);v.setUint16(34,16,true);
+    v.setUint32(24,RATE,true);v.setUint32(28,RATE*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);
     w(36,'data');v.setUint32(40,f.length*2,true);
     for(let i=0;i<f.length;i++){const x=Math.max(-1,Math.min(1,f[i]));v.setInt16(44+i*2,x<0?x*32768:x*32767,true);}
     const r=new FileReader();
     r.onload=()=>{
       if(!window.opener){s('Lost connection to the app. Close this window and try again.');return;}
-      window.opener.postMessage({type:'pq-voice',data:String(r.result).split(',')[1],mime:'audio/wav'},'*');
-      s('Sent. Translating in the app...');setTimeout(()=>window.close(),700);
+      window.opener.postMessage({type:'pq-voice',seq:seq++,data:String(r.result).split(',')[1],mime:'audio/wav'},'*');
+      if(last)finish(); else s('Recording... part '+seq+' sent');
     };
     r.readAsDataURL(new Blob([buf],{type:'audio/wav'}));
-  }catch(e){s('Error: '+e.message);}
+  }catch(e){ s('Error: '+e.message); }
 }
+function finish(){ s('Done. Translating in the app...'); setTimeout(()=>window.close(),800); }
 </script></body></html>
